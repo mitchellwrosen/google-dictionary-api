@@ -1,9 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Data.Dictionary.Google
-    ( Entry
-    , entryData
-    , entryWord
+    ( Entry(..)
     , lookupWord
     , module Data.Dictionary.Google.Types
     ) where
