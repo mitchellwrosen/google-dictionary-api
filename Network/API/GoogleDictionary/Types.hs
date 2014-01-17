@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Data.Dictionary.Google.Types where
+module Network.API.GoogleDictionary.Types where
 
 import Control.Applicative
 import Control.Monad (mzero)

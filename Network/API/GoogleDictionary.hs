@@ -1,19 +1,25 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Data.Dictionary.Google
-    ( Entry(..)
+module Network.API.GoogleDictionary
+    ( Definition
+    , Entry(..)
+    , PartOfSpeech
     , lookupWord
-    , module Data.Dictionary.Google.Types
+    , getResponse
+    , module Network.API.GoogleDictionary.Types
     ) where
 
-import Data.Maybe  (catMaybes)
-import Data.Monoid (First(..), mconcat)
+import           Data.Aeson                 (eitherDecode)
+import qualified Data.ByteString.Lazy.Char8 as BS
+import           Data.List                  (dropWhileEnd)
+import           Data.Maybe                 (catMaybes)
+import           Data.Monoid                (First(..), mconcat)
 
-import Data.Dictionary.Google.Internal
-import Data.Dictionary.Google.Types
+import Network.API.GoogleDictionary.Internal
+import Network.API.GoogleDictionary.Types
 
 type PartOfSpeech = String
-type Definition = String
+type Definition   = String
 
 data Entry = Entry
     { entryWord :: !String
@@ -30,8 +36,10 @@ instance Show Entry where
 lookupWord :: String -> IO (Maybe Entry)
 lookupWord word = lookupWord' (const Nothing) (Just . makeEntry word) word
 
+{-
 lookupWordDebug :: String -> IO (Either String Entry)
 lookupWordDebug word = lookupWord' Left (Right . makeEntry word) word
+-}
 
 lookupWord' :: (String -> a) -> (Response -> a) -> String -> IO a
 lookupWord' left right = fmap (either left right) . getResponse
@@ -44,10 +52,10 @@ makeEntryFromPrimaries word = foldr step (Entry word [])
   where
     step :: Primary -> Entry -> Entry
     step (Primary pentries terms _) =
-        let pos = primaryTermsToPartOfSpeech terms
+        let pos  = primaryTermsToPartOfSpeech terms
             defs = pentriesToDefinitions pentries
-            s = [(pos,d) | d <- defs]
-        in (\(Entry w dat) -> Entry w (dat++s))
+            s    = [(pos,d) | d <- defs]
+        in (\(Entry w dat) -> Entry w (s++dat))
 
 primaryTermsToPartOfSpeech :: [Term] -> PartOfSpeech
 primaryTermsToPartOfSpeech = maybe (error "primaryTermsToPartOfSpeech: no part of speech found") id . f
@@ -82,3 +90,20 @@ pentryTermsToDefinitions = catMaybes . map f
     f :: Term -> Maybe Definition
     f (Term _ _ def TText) = Just def
     f _ = Nothing
+
+getResponse :: String -> IO (Either String Response)
+getResponse word = do
+    let url = "http://www.google.com/dictionary/json?callback=a&sl=en&tl=en&q=" ++ word
+    fmap (decodeHex . trimResponse) (getJson url) >>= maybe badContents goodContents
+  where
+    -- | Trim off the boiler plate callback characters, because JSONP is returned.
+    -- Hard-code "2" because "callback=a" is also hard-coded, so the first two
+    -- characters are "a("
+    trimResponse :: String -> String
+    trimResponse = dropWhileEnd (/= '}') . drop 2
+
+    badContents :: IO (Either String Response)
+    badContents = return (Left "invalid hex code encountered")
+
+    goodContents :: String -> IO (Either String Response)
+    goodContents = return . eitherDecode . BS.pack
