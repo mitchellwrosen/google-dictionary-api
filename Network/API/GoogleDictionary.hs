@@ -27,7 +27,7 @@ data Entry = Entry
     }
 
 instance Show Entry where
-    show = unlines . show' 1 . entryData
+    show (Entry word dat) = unlines (word : show' 1 dat)
       where
         show' :: Int -> [(PartOfSpeech, Definition)] -> [String]
         show' n ((pos,def):xs) = (show n ++ ". (" ++ pos ++ ") " ++ def) : show' (n+1) xs

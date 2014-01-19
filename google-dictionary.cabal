@@ -1,5 +1,5 @@
 name:                google-dictionary
-version:             0.1.0.1
+version:             0.1.0.2
 synopsis:            Simple interface to the google.com/dictionary API
 homepage:            https://github.com/mitchellwrosen/google-dictionary-api
 license:             BSD3
