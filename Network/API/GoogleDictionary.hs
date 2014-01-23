@@ -20,17 +20,22 @@ import Network.API.GoogleDictionary.Types
 
 type PartOfSpeech = String
 type Definition   = String
+type SoundUrl     = String
 
 data Entry = Entry
     { entryWord :: !String
-    , entryData :: [(PartOfSpeech, Definition)]
+    , entryData :: [(PartOfSpeech, Definition, Maybe SoundUrl)]
     }
 
 instance Show Entry where
     show (Entry word dat) = unlines (word : show' 1 dat)
       where
-        show' :: Int -> [(PartOfSpeech, Definition)] -> [String]
-        show' n ((pos,def):xs) = (show n ++ ". (" ++ pos ++ ") " ++ def) : show' (n+1) xs
+        show' :: Int -> [(PartOfSpeech, Definition, Maybe SoundUrl)] -> [String]
+        show' n ((pos,def,soundUrl):xs) =
+            let soundUrlText = case soundUrl of
+                                    Just soundUrl' -> " (" ++ soundUrl' ++ ")"
+                                    Nothing -> ""
+            in (show n ++ ". (" ++ pos ++ ") " ++ def ++ soundUrlText) : show' (n+1) xs
         show' _ [] = []
 
 lookupWord :: String -> IO (Maybe Entry)
@@ -52,10 +57,21 @@ makeEntryFromPrimaries word = foldr step (Entry word [])
   where
     step :: Primary -> Entry -> Entry
     step (Primary pentries terms _) =
-        let pos  = primaryTermsToPartOfSpeech terms
-            defs = pentriesToDefinitions pentries
-            s    = [(pos,d) | d <- defs]
+        let pos      = primaryTermsToPartOfSpeech terms
+            soundUrl = primaryTermsToSoundUrl terms
+            defs     = pentriesToDefinitions pentries
+            s        = [(pos,d,soundUrl) | d <- defs]
         in (\(Entry w dat) -> Entry w (s++dat))
+
+primaryTermsToSoundUrl :: [Term] -> Maybe SoundUrl
+primaryTermsToSoundUrl = f
+  where
+    f :: [Term] -> Maybe SoundUrl
+    f = getFirst . mconcat . map (First . primaryTermToPartOfSpeech)
+
+    primaryTermToPartOfSpeech :: Term -> Maybe SoundUrl
+    primaryTermToPartOfSpeech (Term _ _ soundUrl TSound) = Just soundUrl
+    primaryTermToPartOfSpeech _ = Nothing
 
 primaryTermsToPartOfSpeech :: [Term] -> PartOfSpeech
 primaryTermsToPartOfSpeech = maybe (error "primaryTermsToPartOfSpeech: no part of speech found") id . f
