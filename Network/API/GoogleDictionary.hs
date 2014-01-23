@@ -1,14 +1,16 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Network.API.GoogleDictionary
-    ( Definition
-    , Entry(..)
-    , PartOfSpeech
+    ( Entry(..)
     , lookupWord
     , getResponse
     , module Network.API.GoogleDictionary.Types
     ) where
 
+import           Control.Applicative        ((<$>))
+import           Control.Lens
+import           Control.Monad              (join)
+import           Control.Monad.State
 import           Data.Aeson                 (eitherDecode)
 import qualified Data.ByteString.Lazy.Char8 as BS
 import           Data.List                  (dropWhileEnd)
@@ -18,94 +20,80 @@ import           Data.Monoid                (First(..), mconcat)
 import Network.API.GoogleDictionary.Internal
 import Network.API.GoogleDictionary.Types
 
-type PartOfSpeech = String
-type Definition   = String
-type SoundUrl     = String
-
 data Entry = Entry
-    { entryWord :: !String
-    , entryData :: [(PartOfSpeech, Definition, Maybe SoundUrl)]
+    { entryWord         :: !String
+    , entryDefinition   :: !String
+    , entryPartOfSpeech :: Maybe String
+    , entryPhonetic     :: !String
+    , entrySoundUrl     :: Maybe String
+    } deriving Show
+
+-- Internal representation of an Entry that is more similar to a Response.
+data EntryInternal = EntryInternal
+    { _eiDefinitions  :: [String]
+    , _eiPartOfSpeech :: Maybe String
+    , _eiPhonetic     :: !String
+    , _eiSoundUrl     :: Maybe String
+    } deriving Show
+makeLenses ''EntryInternal
+
+initEntryInternal :: EntryInternal
+initEntryInternal = EntryInternal
+    { _eiDefinitions  = []
+    , _eiPartOfSpeech = Nothing
+    , _eiPhonetic     = ""
+    , _eiSoundUrl     = Nothing
     }
 
-instance Show Entry where
-    show (Entry word dat) = unlines (word : show' 1 dat)
-      where
-        show' :: Int -> [(PartOfSpeech, Definition, Maybe SoundUrl)] -> [String]
-        show' n ((pos,def,soundUrl):xs) =
-            let soundUrlText = case soundUrl of
-                                    Just soundUrl' -> " (" ++ soundUrl' ++ ")"
-                                    Nothing -> ""
-            in (show n ++ ". (" ++ pos ++ ") " ++ def ++ soundUrlText) : show' (n+1) xs
-        show' _ [] = []
+entryInternalToEntries :: String -> EntryInternal -> [Entry]
+entryInternalToEntries word (EntryInternal defs pos phon sound) = 
+    map (\def -> Entry word def pos phon sound) defs
 
-lookupWord :: String -> IO (Maybe Entry)
-lookupWord word = lookupWord' (const Nothing) (Just . makeEntry word) word
+{-instance Show Entry where-}
+    {-show (Entry word dat) = unlines (word : show' 1 dat)-}
+      {-where-}
+        {-show' :: Int -> [(PartOfSpeech, Definition, Maybe SoundUrl)] -> [String]-}
+        {-show' n ((pos,def,soundUrl):xs) =-}
+            {-let soundUrlText = case soundUrl of-}
+                                    {-Just soundUrl' -> " (" ++ soundUrl' ++ ")"-}
+                                    {-Nothing -> ""-}
+            {-in (show n ++ ". (" ++ pos ++ ") " ++ def ++ soundUrlText) : show' (n+1) xs-}
+        {-show' _ [] = []-}
+
+lookupWord :: String -> IO [Entry]
+lookupWord word = either (const []) (entryInternalToEntries word . makeEntry) <$> getResponse word
 
 {-
 lookupWordDebug :: String -> IO (Either String Entry)
 lookupWordDebug word = lookupWord' Left (Right . makeEntry word) word
 -}
 
-lookupWord' :: (String -> a) -> (Response -> a) -> String -> IO a
-lookupWord' left right = fmap (either left right) . getResponse
+makeEntry :: Response -> EntryInternal
+makeEntry response = flip execState initEntryInternal $ mapM processPrimary (responsePrimaries response)
 
-makeEntry :: String -> Response -> Entry
-makeEntry word = makeEntryFromPrimaries word . responsePrimaries
+processPrimary :: Primary -> State EntryInternal ()
+processPrimary (Primary pentries terms _) = do
+    mapM_ processPentry pentries
+    mapM_ processPterm terms
 
-makeEntryFromPrimaries :: String -> [Primary] -> Entry
-makeEntryFromPrimaries word = foldr step (Entry word [])
-  where
-    step :: Primary -> Entry -> Entry
-    step (Primary pentries terms _) =
-        let pos      = primaryTermsToPartOfSpeech terms
-            soundUrl = primaryTermsToSoundUrl terms
-            defs     = pentriesToDefinitions pentries
-            s        = [(pos,d,soundUrl) | d <- defs]
-        in (\(Entry w dat) -> Entry w (s++dat))
+processPentry :: PEntry -> State EntryInternal ()
+processPentry (PEntry _ terms PEMeaning) = mapM_ processPentryTerm terms
+processPentry _ = return ()
 
-primaryTermsToSoundUrl :: [Term] -> Maybe SoundUrl
-primaryTermsToSoundUrl = f
-  where
-    f :: [Term] -> Maybe SoundUrl
-    f = getFirst . mconcat . map (First . primaryTermToPartOfSpeech)
+processPentryTerm :: Term -> State EntryInternal ()
+processPentryTerm (Term _ _ def TText) = eiDefinitions %= (def:)
+processPentryTerm _ = return ()
 
-    primaryTermToPartOfSpeech :: Term -> Maybe SoundUrl
-    primaryTermToPartOfSpeech (Term _ _ soundUrl TSound) = Just soundUrl
-    primaryTermToPartOfSpeech _ = Nothing
+processPterm :: Term -> State EntryInternal ()
+processPterm (Term (Just labels) _ _ TText) = processPtermLabels labels
+processPterm (Term _ _ soundUrl TSound) = eiSoundUrl .= Just soundUrl
+processPterm (Term _ _ phonetic TPhonetic) = eiPhonetic .= phonetic
+processPterm _ = return ()
 
-primaryTermsToPartOfSpeech :: [Term] -> PartOfSpeech
-primaryTermsToPartOfSpeech = maybe (error "primaryTermsToPartOfSpeech: no part of speech found") id . f
-  where
-    f :: [Term] -> Maybe PartOfSpeech
-    f = getFirst . mconcat . map (First . primaryTermToPartOfSpeech)
-
-    primaryTermToPartOfSpeech :: Term -> Maybe PartOfSpeech
-    primaryTermToPartOfSpeech (Term (Just labels) _ _ TText) = Just (labelsToPartOfSpeech labels)
-    primaryTermToPartOfSpeech _ = Nothing
-
-labelsToPartOfSpeech :: [Label] -> PartOfSpeech
-labelsToPartOfSpeech = maybe (error "labelsToPartOfSpeech: no part of speech found") id . f
-  where
-    f :: [Label] -> Maybe PartOfSpeech
-    f = getFirst . mconcat . map (First . labelToPartOfSpeech)
-
-    labelToPartOfSpeech :: Label -> Maybe PartOfSpeech
-    labelToPartOfSpeech (Label pos (Just "Part-of-speech")) = Just pos
-    labelToPartOfSpeech _ = Nothing
-
-pentriesToDefinitions :: [PEntry] -> [Definition]
-pentriesToDefinitions = concatMap f
-  where
-    f :: PEntry -> [Definition]
-    f (PEntry _ terms PEMeaning) = pentryTermsToDefinitions terms
-    f _ = []
-
-pentryTermsToDefinitions :: [Term] -> [Definition]
-pentryTermsToDefinitions = catMaybes . map f
-  where
-    f :: Term -> Maybe Definition
-    f (Term _ _ def TText) = Just def
-    f _ = Nothing
+processPtermLabels :: [Label] -> State EntryInternal ()
+processPtermLabels ((Label pos (Just "Part-of-speech")):_) = eiPartOfSpeech .= Just pos
+processPtermLabels (_:xs) = processPtermLabels xs
+processPtermLabels [] = return () -- No part of speech!
 
 getResponse :: String -> IO (Either String Response)
 getResponse word = do
