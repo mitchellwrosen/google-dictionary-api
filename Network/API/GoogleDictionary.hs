@@ -49,17 +49,6 @@ entryInternalToEntries :: String -> EntryInternal -> [Entry]
 entryInternalToEntries word (EntryInternal defs pos phon sound) = 
     map (\def -> Entry word def pos phon sound) defs
 
-{-instance Show Entry where-}
-    {-show (Entry word dat) = unlines (word : show' 1 dat)-}
-      {-where-}
-        {-show' :: Int -> [(PartOfSpeech, Definition, Maybe SoundUrl)] -> [String]-}
-        {-show' n ((pos,def,soundUrl):xs) =-}
-            {-let soundUrlText = case soundUrl of-}
-                                    {-Just soundUrl' -> " (" ++ soundUrl' ++ ")"-}
-                                    {-Nothing -> ""-}
-            {-in (show n ++ ". (" ++ pos ++ ") " ++ def ++ soundUrlText) : show' (n+1) xs-}
-        {-show' _ [] = []-}
-
 lookupWord :: String -> IO [Entry]
 lookupWord word = either (const []) (entryInternalToEntries word . makeEntry) <$> getResponse word
 
