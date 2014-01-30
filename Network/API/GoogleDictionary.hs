@@ -84,19 +84,24 @@ processPtermLabels ((Label pos (Just "Part-of-speech")):_) = eiPartOfSpeech .= J
 processPtermLabels (_:xs) = processPtermLabels xs
 processPtermLabels [] = return () -- No part of speech!
 
+-- | Get a 'Response', given a word to look up. Returns Left if either there is
+-- a 'ConnError' thrown, or the JSON contains an invalid hex code. Conflates
+-- these two cases into a 'String'.
 getResponse :: String -> IO (Either String Response)
 getResponse word = do
     let url = "http://www.google.com/dictionary/json?callback=a&sl=en&tl=en&q=" ++ word
-    fmap (decodeHex . trimResponse) (getJson url) >>= maybe badContents goodContents
+    either (Left . show)
+           (maybe badContents goodContents . decodeHex . trimResponse)
+           <$> getJson url
   where
-    -- | Trim off the boiler plate callback characters, because JSONP is returned.
+    -- Trim off the boiler plate callback characters, because JSONP is returned.
     -- Hard-code "2" because "callback=a" is also hard-coded, so the first two
     -- characters are "a("
     trimResponse :: String -> String
     trimResponse = dropWhileEnd (/= '}') . drop 2
 
-    badContents :: IO (Either String Response)
-    badContents = return (Left "invalid hex code encountered")
+    badContents :: Either String Response
+    badContents = Left "invalid hex code encountered"
 
-    goodContents :: String -> IO (Either String Response)
-    goodContents = return . eitherDecode . BS.pack
+    goodContents :: String -> Either String Response
+    goodContents = eitherDecode . BS.pack
